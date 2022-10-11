@@ -17,6 +17,14 @@
 //! Nimbus-based Parachain Node Service
 
 use crate::rpc;
+use jsonrpsee::RpcModule;
+use log::info;
+pub use manta_primitives::types::{AccountId, Balance, Block, Hash, Header, Index as Nonce};
+use polkadot_service::CollatorPair;
+use session_key_primitives::{AuraId, NimbusId};
+use std::sync::Arc;
+use substrate_prometheus_endpoint::Registry;
+
 use cumulus_client_cli::CollatorOptions;
 use cumulus_client_consensus_common::ParachainConsensus;
 use cumulus_client_network::BlockAnnounceValidator;
@@ -24,28 +32,36 @@ use cumulus_client_service::{
     prepare_node_config, start_collator, start_full_node, StartCollatorParams, StartFullNodeParams,
 };
 use cumulus_primitives_core::ParaId;
+use cumulus_primitives_parachain_inherent::{
+    MockValidationDataInherentDataProvider, MockXcmConfig,
+};
 use cumulus_relay_chain_inprocess_interface::build_inprocess_relay_chain;
 use cumulus_relay_chain_interface::{RelayChainError, RelayChainInterface, RelayChainResult};
 use cumulus_relay_chain_rpc_interface::RelayChainRPCInterface;
-use jsonrpsee::RpcModule;
-pub use manta_primitives::types::{AccountId, Balance, Block, Hash, Header, Index as Nonce};
-use polkadot_service::CollatorPair;
 
-use nimbus_consensus::{BuildNimbusConsensusParams, NimbusConsensus};
+use nimbus_consensus::{
+    BuildNimbusConsensusParams, NimbusConsensus, NimbusManualSealConsensusDataProvider,
+};
+
+use sc_consensus::LongestChain;
+use sc_consensus_aura::{ImportQueueParams, StartAuraParams};
+use sc_consensus_slots::SlotProportion;
 use sc_executor::WasmExecutor;
 use sc_network::NetworkService;
 pub use sc_rpc::{DenyUnsafe, SubscriptionTaskExecutor};
-use sc_service::{Configuration, Error, Role, TFullBackend, TFullClient, TaskManager};
+use sc_service::{
+    Configuration, Error, KeystoreContainer, Role, TFullBackend, TFullClient, TaskManager,
+};
 use sc_telemetry::{Telemetry, TelemetryHandle, TelemetryWorker, TelemetryWorkerHandle};
-use session_key_primitives::{AuraId, NimbusId};
+
 use sp_api::{ApiExt, ConstructRuntimeApi};
+use sp_blockchain::HeaderBackend;
+use sp_consensus_aura::sr25519::AuthorityPair;
 use sp_keystore::SyncCryptoStorePtr;
 use sp_offchain::OffchainWorkerApi;
 use sp_runtime::traits::BlakeTwo256;
 use sp_session::SessionKeys;
 use sp_transaction_pool::runtime_api::TaggedTransactionQueue;
-use std::sync::Arc;
-use substrate_prometheus_endpoint::Registry;
 
 #[cfg(not(feature = "runtime-benchmarks"))]
 type HostFunctions = sp_io::SubstrateHostFunctions;
@@ -115,6 +131,8 @@ pub type StateBackend = sc_client_api::StateBackendFor<TFullBackend<Block>, Bloc
 /// be able to perform chain operations.
 pub fn new_partial<RuntimeApi>(
     config: &Configuration,
+    dev: bool,
+    use_aura: bool,
 ) -> Result<PartialComponents<RuntimeApi>, Error>
 where
     RuntimeApi: ConstructRuntimeApi<Block, Client<RuntimeApi>> + Send + Sync + 'static,
@@ -166,13 +184,16 @@ where
         client.clone(),
     );
 
-    let import_queue = crate::aura_or_nimbus_consensus::import_queue(
-        // single step block import pipeline, after nimbus/aura seal, import block into client
+    let import_queue = build_import_queue(
         client.clone(),
-        client.clone(),
-        &task_manager.spawn_essential_handle(),
-        config.prometheus_registry(),
+        config,
         telemetry.as_ref().map(|telemetry| telemetry.handle()),
+        &task_manager,
+        if use_aura {
+            Consensus::Aura(dev)
+        } else {
+            Consensus::Nimbus(dev)
+        },
     )?;
 
     Ok(PartialComponents {
@@ -263,7 +284,7 @@ where
 
     let parachain_config = prepare_node_config(parachain_config);
 
-    let params = new_partial::<RuntimeApi>(&parachain_config)?;
+    let params = new_partial::<RuntimeApi>(&parachain_config, false, false)?;
     let (mut telemetry, telemetry_worker_handle) = params.other;
 
     let mut task_manager = params.task_manager;
@@ -474,4 +495,384 @@ where
         hwbench,
     )
     .await
+}
+
+/// Start a calamari/dolphin dev node without relaychain attached.
+pub async fn start_dev_node<RuntimeApi, FullRpc>(
+    config: Configuration,
+    full_rpc: FullRpc,
+    use_aura: bool,
+) -> sc_service::error::Result<(TaskManager, Arc<Client<RuntimeApi>>)>
+where
+    RuntimeApi: ConstructRuntimeApi<Block, Client<RuntimeApi>> + Send + Sync + 'static,
+    RuntimeApi::RuntimeApi: TaggedTransactionQueue<Block>
+        + sp_api::Metadata<Block>
+        + SessionKeys<Block>
+        + ApiExt<Block, StateBackend = StateBackend>
+        + OffchainWorkerApi<Block>
+        + sp_block_builder::BlockBuilder<Block>
+        + cumulus_primitives_core::CollectCollationInfo<Block>
+        + pallet_transaction_payment_rpc::TransactionPaymentRuntimeApi<Block, Balance>
+        + nimbus_primitives::AuthorFilterAPI<Block, NimbusId>
+        + nimbus_primitives::NimbusApi<Block>
+        + sp_consensus_aura::AuraApi<Block, AuraId>
+        + frame_rpc_system::AccountNonceApi<Block, AccountId, Nonce>,
+    StateBackend: sp_api::StateBackend<BlakeTwo256>,
+    FullRpc: Fn(
+            rpc::FullDeps<Client<RuntimeApi>, TransactionPool<RuntimeApi>>,
+        ) -> Result<RpcModule<()>, Error>
+        + 'static,
+{
+    let sc_service::PartialComponents {
+        client,
+        backend,
+        mut task_manager,
+        import_queue,
+        keystore_container,
+        select_chain: _maybe_select_chain,
+        transaction_pool,
+        other: (_, _),
+    } = new_partial::<RuntimeApi>(&config, true, use_aura)?;
+
+    let (network, system_rpc_tx, network_starter) =
+        sc_service::build_network(sc_service::BuildNetworkParams {
+            config: &config,
+            client: client.clone(),
+            transaction_pool: transaction_pool.clone(),
+            spawn_handle: task_manager.spawn_handle(),
+            import_queue,
+            block_announce_validator_builder: None,
+            warp_sync: None,
+        })?;
+
+    let role = config.role.clone();
+    let select_chain = LongestChain::new(backend.clone());
+
+    if role.is_authority() {
+        start_dev_consensus(
+            client.clone(),
+            &config,
+            transaction_pool.clone(),
+            &keystore_container,
+            select_chain,
+            &task_manager,
+            network.clone(),
+            if use_aura {
+                Consensus::Aura(true)
+            } else {
+                Consensus::Nimbus(true)
+            },
+        )?;
+    }
+
+    let rpc_builder = {
+        let client = client.clone();
+        let transaction_pool = transaction_pool.clone();
+
+        Box::new(move |deny_unsafe, _| {
+            let deps = crate::rpc::FullDeps {
+                client: client.clone(),
+                pool: transaction_pool.clone(),
+                deny_unsafe,
+            };
+
+            full_rpc(deps)
+        })
+    };
+
+    sc_service::spawn_tasks(sc_service::SpawnTasksParams {
+        rpc_builder,
+        client: client.clone(),
+        transaction_pool,
+        task_manager: &mut task_manager,
+        config,
+        keystore: keystore_container.sync_keystore(),
+        backend,
+        network,
+        system_rpc_tx,
+        telemetry: None,
+    })?;
+
+    network_starter.start_network();
+    info!("Network started.");
+
+    Ok((task_manager, client))
+}
+
+/// build import queue for different consensus
+pub fn build_import_queue<RuntimeApi>(
+    client: Arc<Client<RuntimeApi>>,
+    config: &Configuration,
+    telemetry_handle: Option<TelemetryHandle>,
+    task_manager: &TaskManager,
+    consensus_mode: Consensus,
+) -> Result<ImportQueue<RuntimeApi>, Error>
+where
+    RuntimeApi: ConstructRuntimeApi<Block, Client<RuntimeApi>> + Send + Sync + 'static,
+    RuntimeApi::RuntimeApi: TaggedTransactionQueue<Block>
+        + sp_api::Metadata<Block>
+        + SessionKeys<Block>
+        + ApiExt<Block, StateBackend = StateBackend>
+        + OffchainWorkerApi<Block>
+        + sp_block_builder::BlockBuilder<Block>
+        + sp_consensus_aura::AuraApi<Block, AuraId>,
+    StateBackend: sp_api::StateBackend<BlakeTwo256>,
+{
+    match consensus_mode {
+        // Actually we don't need `dev` switch on `Nimbus` mode, as `Nimbus` is work both as standalone and parachain node.
+        Consensus::Nimbus(_dev) => {
+            Ok(crate::aura_or_nimbus_consensus::import_queue(
+                // single step block import pipeline, after nimbus/aura seal, import block into client
+                client.clone(),
+                client.clone(),
+                &task_manager.spawn_essential_handle(),
+                config.prometheus_registry(),
+                telemetry_handle,
+            )?)
+        }
+        Consensus::Aura(dev) if dev => {
+            let slot_duration = sc_consensus_aura::slot_duration(&*client)?;
+            let client_for_cidp = client.clone();
+
+            let import_queue = sc_consensus_aura::import_queue::<AuthorityPair, _, _, _, _, _, _>(
+                ImportQueueParams {
+                    block_import: client.clone(),
+                    justification_import: None,
+                    client: client.clone(),
+                    create_inherent_data_providers: move |block: Hash, ()| {
+                        let current_para_block = client_for_cidp
+                            .number(block)
+                            .expect("Header lookup should succeed")
+                            .expect("Header passed in as parent should be present in backend.");
+                        let client_for_xcm = client_for_cidp.clone();
+
+                        async move {
+                            let timestamp = sp_timestamp::InherentDataProvider::from_system_time();
+
+                            let slot = sp_consensus_aura::inherents::InherentDataProvider::from_timestamp_and_slot_duration(
+                            *timestamp,
+                            slot_duration,
+                        );
+
+                            let mocked_parachain = MockValidationDataInherentDataProvider {
+                                current_para_block,
+                                relay_offset: 1000,
+                                relay_blocks_per_para_block: 2,
+                                xcm_config: MockXcmConfig::new(
+                                    &*client_for_xcm,
+                                    block,
+                                    Default::default(),
+                                    Default::default(),
+                                ),
+                                raw_downward_messages: vec![],
+                                raw_horizontal_messages: vec![],
+                            };
+
+                            Ok((timestamp, slot, mocked_parachain))
+                        }
+                    },
+                    spawner: &task_manager.spawn_essential_handle(),
+                    registry: config.prometheus_registry(),
+                    can_author_with: sp_consensus::AlwaysCanAuthor,
+                    check_for_equivocation: Default::default(),
+                    telemetry: telemetry_handle,
+                },
+            )?;
+            Ok(import_queue)
+        }
+        _ => Err(Error::Other("Not supported consensus type!".to_string())),
+    }
+}
+
+/// start dev consensus
+pub fn start_dev_consensus<RuntimeApi>(
+    client: Arc<Client<RuntimeApi>>,
+    config: &Configuration,
+    transaction_pool: Arc<TransactionPool<RuntimeApi>>,
+    keystore_container: &KeystoreContainer,
+    select_chain: LongestChain<TFullBackend<Block>, Block>,
+    task_manager: &TaskManager,
+    network: Arc<NetworkService<Block, Hash>>,
+    consensus_mode: Consensus,
+) -> Result<(), Error>
+where
+    RuntimeApi: ConstructRuntimeApi<Block, Client<RuntimeApi>> + Send + Sync + 'static,
+    RuntimeApi::RuntimeApi: TaggedTransactionQueue<Block>
+        + sp_api::Metadata<Block>
+        + SessionKeys<Block>
+        + ApiExt<Block, StateBackend = StateBackend>
+        + OffchainWorkerApi<Block>
+        + sp_block_builder::BlockBuilder<Block>
+        + cumulus_primitives_core::CollectCollationInfo<Block>
+        + pallet_transaction_payment_rpc::TransactionPaymentRuntimeApi<Block, Balance>
+        + nimbus_primitives::AuthorFilterAPI<Block, NimbusId>
+        + nimbus_primitives::NimbusApi<Block>
+        + sp_consensus_aura::AuraApi<Block, AuraId>
+        + frame_rpc_system::AccountNonceApi<Block, AccountId, Nonce>,
+    StateBackend: sp_api::StateBackend<BlakeTwo256>,
+{
+    use futures::{Stream, StreamExt};
+    use sc_consensus_manual_seal::{run_manual_seal, EngineCommand, ManualSealParams};
+    use sc_consensus_slots::BackoffAuthoringOnFinalizedHeadLagging;
+
+    let proposer_factory = sc_basic_authorship::ProposerFactory::new(
+        task_manager.spawn_handle(),
+        client.clone(),
+        transaction_pool.clone(),
+        None,
+        None,
+    );
+
+    match consensus_mode {
+        Consensus::Nimbus(_dev) => {
+            let commands_stream: Box<dyn Stream<Item = EngineCommand<Hash>> + Send + Sync + Unpin> =
+                Box::new(
+                    // This bit cribbed from the implementation of instant seal.
+                    transaction_pool
+                        .pool()
+                        .validated_pool()
+                        .import_notification_stream()
+                        .map(|_| EngineCommand::SealNewBlock {
+                            create_empty: false,
+                            finalize: false,
+                            parent_hash: None,
+                            sender: None,
+                        }),
+                );
+
+            let client_set_aside_for_cidp = client.clone();
+
+            let consensus = run_manual_seal(ManualSealParams {
+                block_import: client.clone(),
+                env: proposer_factory,
+                client: client.clone(),
+                pool: transaction_pool.clone(),
+                commands_stream,
+                select_chain,
+                consensus_data_provider: Some(Box::new(NimbusManualSealConsensusDataProvider {
+                    keystore: keystore_container.sync_keystore(),
+                    client: client.clone(),
+                    additional_digests_provider: (),
+                })),
+                create_inherent_data_providers: move |block: Hash, ()| {
+                    let current_para_block = client_set_aside_for_cidp
+                        .number(block)
+                        .expect("Header lookup should succeed")
+                        .expect("Header passed in as parent should be present in backend.");
+
+                    let client_for_xcm = client_set_aside_for_cidp.clone();
+                    async move {
+                        let time = sp_timestamp::InherentDataProvider::from_system_time();
+
+                        let mocked_parachain = MockValidationDataInherentDataProvider {
+                            current_para_block,
+                            relay_offset: 1000,
+                            relay_blocks_per_para_block: 2,
+                            xcm_config: MockXcmConfig::new(
+                                &*client_for_xcm,
+                                block,
+                                Default::default(),
+                                Default::default(),
+                            ),
+                            raw_downward_messages: vec![],
+                            raw_horizontal_messages: vec![],
+                        };
+
+                        Ok((time, mocked_parachain))
+                    }
+                },
+            });
+
+            task_manager.spawn_essential_handle().spawn_blocking(
+                "authorship_task",
+                Some("block-authoring"),
+                consensus,
+            );
+        }
+        Consensus::Aura(dev) if dev => {
+            let slot_duration = sc_consensus_aura::slot_duration(&*client)?;
+            let client_for_cidp = client.clone();
+
+            let aura = sc_consensus_aura::start_aura::<
+                AuthorityPair,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+            >(StartAuraParams {
+                slot_duration: sc_consensus_aura::slot_duration(&*client)?,
+                client: client.clone(),
+                select_chain,
+                block_import: client.clone(),
+                proposer_factory,
+                create_inherent_data_providers: move |block: Hash, ()| {
+                    let current_para_block = client_for_cidp
+                        .number(block)
+                        .expect("Header lookup should succeed")
+                        .expect("Header passed in as parent should be present in backend.");
+                    let client_for_xcm = client_for_cidp.clone();
+
+                    async move {
+                        let timestamp = sp_timestamp::InherentDataProvider::from_system_time();
+
+                        let slot = sp_consensus_aura::inherents::InherentDataProvider::from_timestamp_and_slot_duration(
+                            *timestamp,
+                            slot_duration,
+                        );
+
+                        let mocked_parachain = MockValidationDataInherentDataProvider {
+                            current_para_block,
+                            relay_offset: 1000,
+                            relay_blocks_per_para_block: 2,
+                            xcm_config: MockXcmConfig::new(
+                                &*client_for_xcm,
+                                block,
+                                Default::default(),
+                                Default::default(),
+                            ),
+                            raw_downward_messages: vec![],
+                            raw_horizontal_messages: vec![],
+                        };
+
+                        Ok((timestamp, slot, mocked_parachain))
+                    }
+                },
+                force_authoring: config.force_authoring,
+                backoff_authoring_blocks: Some(BackoffAuthoringOnFinalizedHeadLagging::default()),
+                keystore: keystore_container.sync_keystore(),
+                can_author_with: sp_consensus::AlwaysCanAuthor,
+                sync_oracle: network.clone(),
+                justification_sync_link: network.clone(),
+                // We got around 500ms for proposing
+                block_proposal_slot_portion: SlotProportion::new(1f32 / 24f32),
+                // And a maximum of 750ms if slots are skipped
+                max_block_proposal_slot_portion: Some(SlotProportion::new(1f32 / 16f32)),
+                telemetry: None,
+            })?;
+            task_manager.spawn_essential_handle().spawn_blocking(
+                "aura",
+                Some("block-authoring"),
+                aura,
+            );
+            info!("Aura Consensus Started.")
+        }
+        _ => {}
+    }
+
+    Ok(())
+}
+
+/// Consensus type, the `bool` indicate whether is `dev` or not.
+pub enum Consensus {
+    /// Use aura consensus
+    Aura(bool),
+    /// Use nimbus consensus
+    Nimbus(bool),
 }

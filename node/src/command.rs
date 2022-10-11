@@ -66,6 +66,7 @@ trait IdentifyChain {
     fn is_manta(&self) -> bool;
     fn is_calamari(&self) -> bool;
     fn is_dolphin(&self) -> bool;
+    fn is_dev(&self) -> bool;
 }
 
 impl IdentifyChain for dyn sc_service::ChainSpec {
@@ -78,6 +79,9 @@ impl IdentifyChain for dyn sc_service::ChainSpec {
     fn is_dolphin(&self) -> bool {
         self.id().starts_with("dolphin")
     }
+    fn is_dev(&self) -> bool {
+        self.id().ends_with("dev")
+    }
 }
 
 impl<T: sc_service::ChainSpec + 'static> IdentifyChain for T {
@@ -89,6 +93,9 @@ impl<T: sc_service::ChainSpec + 'static> IdentifyChain for T {
     }
     fn is_dolphin(&self) -> bool {
         <dyn sc_service::ChainSpec>::is_dolphin(self)
+    }
+    fn is_dev(&self) -> bool {
+        <dyn sc_service::ChainSpec>::is_dev(self)
     }
 }
 
@@ -231,10 +238,10 @@ macro_rules! construct_benchmark_partials {
             )?;
             $code
         } else if $config.chain_spec.is_calamari() {
-            let $partials = new_partial::<calamari_runtime::RuntimeApi>(&$config)?;
+            let $partials = new_partial::<calamari_runtime::RuntimeApi>(&$config, false, false)?;
             $code
         } else if $config.chain_spec.is_dolphin() {
-            let $partials = new_partial::<dolphin_runtime::RuntimeApi>(&$config)?;
+            let $partials = new_partial::<dolphin_runtime::RuntimeApi>(&$config, false, false)?;
             $code
         } else {
             Err("The chain is not supported".into())
@@ -257,7 +264,7 @@ macro_rules! construct_async_run {
             } else if runner.config().chain_spec.is_calamari() {
                 runner.async_run(|$config| {
                     let $components = new_partial::<calamari_runtime::RuntimeApi>(
-                        &$config,
+                        &$config, false, false
                     )?;
                     let task_manager = $components.task_manager;
                     { $( $code )* }.map(|v| (v, task_manager))
@@ -265,7 +272,7 @@ macro_rules! construct_async_run {
             } else if runner.config().chain_spec.is_dolphin() {
                 runner.async_run(|$config| {
                     let $components = new_partial::<dolphin_runtime::RuntimeApi>(
-                        &$config,
+                        &$config, false, false
                     )?;
                     let task_manager = $components.task_manager;
                     { $( $code )* }.map(|v| (v, task_manager))
@@ -419,9 +426,22 @@ pub fn run_with(cli: Cli) -> Result {
             .into()),
         None => {
             let runner = cli.create_runner(&cli.run.normalize())?;
+            let chain_spec = &runner.config().chain_spec;
+            let is_dev = chain_spec.is_dev();
             let collator_options = cli.run.collator_options();
 
             runner.run_node_until_exit(|config| async move {
+                // dev mode only on dolphin for now
+                if is_dev && config.chain_spec.is_dolphin()  {
+                    info!("DEV STANDALONE MODE.");
+                    return crate::service::start_dev_node::<dolphin_runtime::RuntimeApi, _>(
+                        config,
+                        rpc::create_dolphin_full,
+                        false
+                    ).await
+                        .map(|r| r.0).map_err(Into::into);
+                }
+
                 let hwbench = if !cli.no_hardware_benchmarks {
                     config.database.path().map(|database_path| {
                         let _ = std::fs::create_dir_all(database_path);
