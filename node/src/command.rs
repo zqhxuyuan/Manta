@@ -437,7 +437,7 @@ pub fn run_with(cli: Cli) -> Result {
                     return crate::service::start_dev_node::<dolphin_runtime::RuntimeApi, _>(
                         config,
                         rpc::create_dolphin_full,
-                        false
+                        true
                     ).await
                         .map(|r| r.0).map_err(Into::into);
                 }
