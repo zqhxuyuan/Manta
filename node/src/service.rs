@@ -43,6 +43,7 @@ pub use sc_rpc::{DenyUnsafe, SubscriptionTaskExecutor};
 use sc_service::{Configuration, Error, Role, TFullBackend, TFullClient, TaskManager};
 use sc_telemetry::{Telemetry, TelemetryHandle, TelemetryWorker, TelemetryWorkerHandle};
 
+use crate::builder::ConsensusBuilder;
 use sp_api::ConstructRuntimeApi;
 use sp_keystore::SyncCryptoStorePtr;
 
@@ -166,11 +167,7 @@ where
         config,
         telemetry.as_ref().map(|telemetry| telemetry.handle()),
         &task_manager,
-        if use_aura {
-            crate::builder::Consensus::Aura(dev)
-        } else {
-            crate::builder::Consensus::Nimbus(dev)
-        },
+        ConsensusBuilder::default().dev(dev).aura(use_aura).build(),
     )?;
 
     Ok(PartialComponents {
@@ -420,11 +417,7 @@ where
             select_chain,
             &task_manager,
             network.clone(),
-            if use_aura {
-                crate::builder::Consensus::Aura(true)
-            } else {
-                crate::builder::Consensus::Nimbus(true)
-            },
+            ConsensusBuilder::default().dev(true).aura(use_aura).build(),
         )?;
     }
 

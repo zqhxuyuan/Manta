@@ -403,3 +403,42 @@ pub enum Consensus {
     /// Use nimbus consensus
     Nimbus(bool),
 }
+
+/// Consensus builder
+pub struct ConsensusBuilder {
+    /// dev mode
+    pub dev: bool,
+    /// aura mode
+    pub aura: bool,
+}
+
+impl ConsensusBuilder {
+    /// default not use dev and aura
+    pub fn default() -> Self {
+        Self {
+            dev: false,
+            aura: false,
+        }
+    }
+
+    /// set dev mode
+    pub fn dev(mut self, dev: bool) -> Self {
+        self.dev = dev;
+        self
+    }
+
+    /// set aura mode
+    pub fn aura(mut self, aura: bool) -> Self {
+        self.aura = aura;
+        self
+    }
+
+    /// build consensus
+    pub fn build(self) -> Consensus {
+        if self.aura {
+            Consensus::Aura(self.dev)
+        } else {
+            Consensus::Nimbus(self.dev)
+        }
+    }
+}
