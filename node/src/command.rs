@@ -34,7 +34,6 @@ use sc_cli::{
     NetworkParams, RuntimeVersion, SharedParams, SubstrateCli,
 };
 use sc_service::config::{BasePath, PrometheusConfig};
-use session_key_primitives::AuraId;
 use sp_core::hexdisplay::HexDisplay;
 use sp_runtime::{
     generic,
@@ -232,10 +231,7 @@ impl SubstrateCli for RelayChainCli {
 macro_rules! construct_benchmark_partials {
     ($config:expr, |$partials:ident| $code:expr) => {
         if $config.chain_spec.is_manta() {
-            let $partials = crate::service_aura::new_partial::<manta_runtime::RuntimeApi, _>(
-                &$config,
-                crate::service_aura::parachain_build_import_queue::<_, AuraId>,
-            )?;
+            let $partials = new_partial::<manta_runtime::RuntimeApi>(&$config, false, false)?;
             $code
         } else if $config.chain_spec.is_calamari() {
             let $partials = new_partial::<calamari_runtime::RuntimeApi>(&$config, false, false)?;
@@ -254,9 +250,8 @@ macro_rules! construct_async_run {
         let runner = $cli.create_runner($cmd)?;
             if runner.config().chain_spec.is_manta() {
                 runner.async_run(|$config| {
-                    let $components = crate::service_aura::new_partial::<manta_runtime::RuntimeApi, _>(
-                        &$config,
-                        crate::service_aura::parachain_build_import_queue::<_, AuraId>,
+                    let $components = new_partial::<manta_runtime::RuntimeApi>(
+                        &$config, false, false
                     )?;
                     let task_manager = $components.task_manager;
                     { $( $code )* }.map(|v| (v, task_manager))
@@ -431,15 +426,27 @@ pub fn run_with(cli: Cli) -> Result {
             let collator_options = cli.run.collator_options();
 
             runner.run_node_until_exit(|config| async move {
-                // dev mode only on dolphin for now
-                if is_dev && config.chain_spec.is_dolphin()  {
+                if is_dev {
                     info!("DEV STANDALONE MODE.");
-                    return crate::service::start_dev_node::<dolphin_runtime::RuntimeApi, _>(
-                        config,
-                        rpc::create_dolphin_full,
-                        false
-                    ).await
-                        .map(|r| r.0).map_err(Into::into);
+                    if config.chain_spec.is_dolphin() {
+                        return crate::service::start_dev_nimbus_node::<dolphin_runtime::RuntimeApi, _>(
+                            config,
+                            rpc::create_dolphin_full,
+                        ).await
+                            .map_err(Into::into);
+                    } else if config.chain_spec.is_calamari() {
+                        return crate::service::start_dev_nimbus_node::<calamari_runtime::RuntimeApi, _>(
+                            config,
+                            rpc::create_common_full,
+                        ).await
+                            .map_err(Into::into);
+                    } else if config.chain_spec.is_manta() {
+                        return crate::service::start_dev_aura_node::<manta_runtime::RuntimeApi, _>(
+                            config,
+                            rpc::create_common_full,
+                        ).await
+                            .map_err(Into::into);
+                    }
                 }
 
                 let hwbench = if !cli.no_hardware_benchmarks {
@@ -493,7 +500,7 @@ pub fn run_with(cli: Cli) -> Result {
                 );
 
                 if config.chain_spec.is_manta() {
-                    crate::service_aura::start_parachain_node::<manta_runtime::RuntimeApi, AuraId, _>(
+                    crate::service::start_parachain_aura_node::<manta_runtime::RuntimeApi, _>(
                         config,
                         polkadot_config,
                         collator_options,

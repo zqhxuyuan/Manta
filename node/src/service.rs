@@ -17,7 +17,7 @@
 //! Nimbus-based Parachain Node Service
 
 use crate::{
-    client::{RuntimeApiCommon, RuntimeApiExtend},
+    client::{RuntimeApiAura, RuntimeApiCommon, RuntimeApiNimbus},
     rpc,
 };
 
@@ -197,7 +197,7 @@ async fn start_node_impl<RuntimeApi, BIC, FullRpc>(
 ) -> sc_service::error::Result<(TaskManager, Arc<Client<RuntimeApi>>)>
 where
     RuntimeApi: ConstructRuntimeApi<Block, Client<RuntimeApi>> + Send + Sync + 'static,
-    RuntimeApi::RuntimeApi: RuntimeApiCommon<StateBackend = StateBackend> + RuntimeApiExtend,
+    RuntimeApi::RuntimeApi: RuntimeApiCommon<StateBackend = StateBackend> + RuntimeApiAura<AuraId>,
     FullRpc: Fn(
             rpc::FullDeps<Client<RuntimeApi>, TransactionPool<RuntimeApi>>,
         ) -> Result<RpcModule<()>, Error>
@@ -340,7 +340,7 @@ where
     Ok((task_manager, client))
 }
 
-/// Start a calamari/dolphin parachain node.
+/// Start a calamari/dolphin parachain node using Nimbus consensus.
 pub async fn start_parachain_node<RuntimeApi, FullRpc>(
     parachain_config: Configuration,
     polkadot_config: Configuration,
@@ -351,7 +351,7 @@ pub async fn start_parachain_node<RuntimeApi, FullRpc>(
 ) -> sc_service::error::Result<(TaskManager, Arc<Client<RuntimeApi>>)>
 where
     RuntimeApi: ConstructRuntimeApi<Block, Client<RuntimeApi>> + Send + Sync + 'static,
-    RuntimeApi::RuntimeApi: RuntimeApiCommon<StateBackend = StateBackend> + RuntimeApiExtend,
+    RuntimeApi::RuntimeApi: RuntimeApiCommon<StateBackend = StateBackend> + RuntimeApiNimbus,
     FullRpc: Fn(
             rpc::FullDeps<Client<RuntimeApi>, TransactionPool<RuntimeApi>>,
         ) -> Result<RpcModule<()>, Error>
@@ -363,21 +363,49 @@ where
         collator_options,
         id,
         full_rpc,
-        crate::builder::build_consensus,
+        crate::builder::build_nimbus_consensus,
+        hwbench,
+    )
+    .await
+}
+
+/// Start a calamari/dolphin parachain node using aura consensus.
+pub async fn start_parachain_aura_node<RuntimeApi, FullRpc>(
+    parachain_config: Configuration,
+    polkadot_config: Configuration,
+    collator_options: CollatorOptions,
+    id: ParaId,
+    hwbench: Option<sc_sysinfo::HwBench>,
+    full_rpc: FullRpc,
+) -> sc_service::error::Result<(TaskManager, Arc<Client<RuntimeApi>>)>
+where
+    RuntimeApi: ConstructRuntimeApi<Block, Client<RuntimeApi>> + Send + Sync + 'static,
+    RuntimeApi::RuntimeApi: RuntimeApiCommon<StateBackend = StateBackend> + RuntimeApiAura<AuraId>,
+    FullRpc: Fn(
+            rpc::FullDeps<Client<RuntimeApi>, TransactionPool<RuntimeApi>>,
+        ) -> Result<RpcModule<()>, Error>
+        + 'static,
+{
+    start_node_impl::<RuntimeApi, _, _>(
+        parachain_config,
+        polkadot_config,
+        collator_options,
+        id,
+        full_rpc,
+        crate::builder::build_aura_consensus,
         hwbench,
     )
     .await
 }
 
 /// Start a calamari/dolphin dev node without relaychain attached.
-pub async fn start_dev_node<RuntimeApi, FullRpc>(
+pub async fn start_dev_aura_node<RuntimeApi, FullRpc>(
     config: Configuration,
     full_rpc: FullRpc,
-    use_aura: bool,
-) -> sc_service::error::Result<(TaskManager, Arc<Client<RuntimeApi>>)>
+) -> sc_service::error::Result<TaskManager>
 where
     RuntimeApi: ConstructRuntimeApi<Block, Client<RuntimeApi>> + Send + Sync + 'static,
-    RuntimeApi::RuntimeApi: RuntimeApiCommon<StateBackend = StateBackend> + RuntimeApiExtend,
+    RuntimeApi::RuntimeApi: RuntimeApiCommon<StateBackend = StateBackend> + RuntimeApiAura<AuraId>,
     FullRpc: Fn(
             rpc::FullDeps<Client<RuntimeApi>, TransactionPool<RuntimeApi>>,
         ) -> Result<RpcModule<()>, Error>
@@ -392,7 +420,7 @@ where
         select_chain: _maybe_select_chain,
         transaction_pool,
         other: (_, _),
-    } = new_partial::<RuntimeApi>(&config, true, use_aura)?;
+    } = new_partial::<RuntimeApi>(&config, true, true)?;
 
     let (network, system_rpc_tx, network_starter) =
         sc_service::build_network(sc_service::BuildNetworkParams {
@@ -409,7 +437,7 @@ where
     let select_chain = LongestChain::new(backend.clone());
 
     if role.is_authority() {
-        crate::builder::start_dev_consensus(
+        crate::builder::start_dev_aura_consensus(
             client.clone(),
             &config,
             transaction_pool.clone(),
@@ -417,7 +445,6 @@ where
             select_chain,
             &task_manager,
             network.clone(),
-            ConsensusBuilder::default().dev(true).aura(use_aura).build(),
         )?;
     }
 
@@ -451,5 +478,86 @@ where
 
     network_starter.start_network();
 
-    Ok((task_manager, client))
+    Ok(task_manager)
+}
+
+/// Start a calamari/dolphin dev node using nimbus instant-sealing consensus without relaychain attached.
+pub async fn start_dev_nimbus_node<RuntimeApi, FullRpc>(
+    config: Configuration,
+    full_rpc: FullRpc,
+) -> sc_service::error::Result<TaskManager>
+where
+    RuntimeApi: ConstructRuntimeApi<Block, Client<RuntimeApi>> + Send + Sync + 'static,
+    RuntimeApi::RuntimeApi: RuntimeApiCommon<StateBackend = StateBackend> + RuntimeApiNimbus,
+    FullRpc: Fn(
+            rpc::FullDeps<Client<RuntimeApi>, TransactionPool<RuntimeApi>>,
+        ) -> Result<RpcModule<()>, Error>
+        + 'static,
+{
+    let sc_service::PartialComponents {
+        client,
+        backend,
+        mut task_manager,
+        import_queue,
+        keystore_container,
+        select_chain: _maybe_select_chain,
+        transaction_pool,
+        other: (_, _),
+    } = new_partial::<RuntimeApi>(&config, true, false)?;
+
+    let (network, system_rpc_tx, network_starter) =
+        sc_service::build_network(sc_service::BuildNetworkParams {
+            config: &config,
+            client: client.clone(),
+            transaction_pool: transaction_pool.clone(),
+            spawn_handle: task_manager.spawn_handle(),
+            import_queue,
+            block_announce_validator_builder: None,
+            warp_sync: None,
+        })?;
+
+    let role = config.role.clone();
+    let select_chain = LongestChain::new(backend.clone());
+
+    if role.is_authority() {
+        crate::builder::start_dev_nimbus_instant_seal_consensus(
+            client.clone(),
+            transaction_pool.clone(),
+            &keystore_container,
+            select_chain,
+            &task_manager,
+        )?;
+    }
+
+    let rpc_builder = {
+        let client = client.clone();
+        let transaction_pool = transaction_pool.clone();
+
+        Box::new(move |deny_unsafe, _| {
+            let deps = rpc::FullDeps {
+                client: client.clone(),
+                pool: transaction_pool.clone(),
+                deny_unsafe,
+            };
+
+            full_rpc(deps)
+        })
+    };
+
+    sc_service::spawn_tasks(sc_service::SpawnTasksParams {
+        rpc_builder,
+        client: client.clone(),
+        transaction_pool,
+        task_manager: &mut task_manager,
+        config,
+        keystore: keystore_container.sync_keystore(),
+        backend,
+        network,
+        system_rpc_tx,
+        telemetry: None,
+    })?;
+
+    network_starter.start_network();
+
+    Ok(task_manager)
 }
