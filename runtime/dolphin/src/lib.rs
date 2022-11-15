@@ -747,6 +747,7 @@ construct_runtime!(
         Assets: pallet_assets::{Pallet, Call, Storage, Event<T>} = 45,
         AssetManager: pallet_asset_manager::{Pallet, Call, Storage, Config<T>, Event<T>} = 46,
         MantaPay: pallet_manta_pay::{Pallet, Call, Storage, Event<T>} = 47,
+        Uniques: pallet_uniques::{Pallet, Call, Storage, Event<T>} = 48,
     }
 );
 

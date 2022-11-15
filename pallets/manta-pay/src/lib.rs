@@ -75,6 +75,7 @@ use manta_crypto::{
 use manta_pay::config;
 use manta_primitives::{
     assets::{self, AssetConfig, FungibleLedger as _},
+    nft::NonFungibleLedger,
     types::Balance,
 };
 use manta_util::codec::Decode as _;
@@ -83,6 +84,7 @@ use scale_info::TypeInfo;
 use types::*;
 
 pub use manta_pay::signer::{Checkpoint, RawCheckpoint};
+use manta_primitives::assets::AssetRegistry;
 pub use pallet::*;
 pub use types::PullResponse;
 pub use weights::WeightInfo;
@@ -110,6 +112,7 @@ pub type StandardAssetId = u32;
 
 /// Fungible Ledger Error
 pub type FungibleLedgerError = assets::FungibleLedgerError<StandardAssetId, AssetValueType>;
+// pub type NonFungibleLedgerError = assets::FungibleLedgerError<StandardAssetId, ()>;
 
 /// MantaPay Pallet
 #[frame_support::pallet]
@@ -146,6 +149,13 @@ pub mod pallet {
     /// Fungible Ledger Implementation for [`Config`]
     pub(crate) type FungibleLedger<T> =
         <<T as Config>::AssetConfig as AssetConfig<T>>::FungibleLedger;
+
+    /// Non Fungible Ledger Implementation for [`Config`]
+    pub(crate) type NonFungibleLedgers<T> =
+        <<T as Config>::AssetConfig as AssetConfig<T>>::NonFungibleLedger;
+
+    pub(crate) type AssetRegistra<T> =
+        <<T as Config>::AssetConfig as AssetConfig<T>>::AssetRegistry;
 
     #[pallet::hooks]
     impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {}
@@ -925,24 +935,46 @@ where
         super_key: &TransferLedgerSuperPostingKey<config::Config, Self>,
     ) -> Result<(), Self::UpdateError> {
         let _ = (proof, super_key);
-        for WrapPair(account_id, withdraw) in sources {
-            FungibleLedger::<T>::transfer(
-                asset_id.0,
-                &account_id,
-                &Pallet::<T>::account_id(),
-                withdraw.0,
-                ExistenceRequirement::KeepAlive,
-            )?;
+        // TODO: use asset_id to decide whether it's FT or NFT.
+        // We don't use pallet_assets to store NFT. So if given asset_id not exist in pallet_assets, it's NFT.
+        // This suppose FT asset(maximum) not large than minimum NFT asset_id. If those FT and NFT overlap,
+        // This can't work for FT asset, because its being consider as NFT!
+        let is_fungible = AssetRegistra::<T>::is_fungible_asset(asset_id.0);
+        let asset_id1: u32 = asset_id.0;
+        let collection_id: u32 = (asset_id1 >> 16) as u32;
+        let item_id: u32 = (asset_id1 & 0xffff) as u32;
+        if is_fungible {
+            for WrapPair(account_id, withdraw) in sources {
+                FungibleLedger::<T>::transfer(
+                    asset_id.0,
+                    &account_id,
+                    &Pallet::<T>::account_id(),
+                    withdraw.0,
+                    ExistenceRequirement::KeepAlive,
+                )?;
+            }
+            for WrapPair(account_id, deposit) in sinks {
+                FungibleLedger::<T>::transfer(
+                    asset_id.0,
+                    &Pallet::<T>::account_id(),
+                    &account_id,
+                    deposit.0,
+                    ExistenceRequirement::KeepAlive,
+                )?;
+            }
+        } else {
+            for WrapPair(account_id, withdraw) in sources {
+                NonFungibleLedgers::<T>::transfer(
+                    &collection_id,
+                    &item_id,
+                    &Pallet::<T>::account_id(),
+                )?;
+            }
+            for WrapPair(account_id, deposit) in sinks {
+                NonFungibleLedgers::<T>::transfer(&collection_id, &item_id, &account_id)?;
+            }
         }
-        for WrapPair(account_id, deposit) in sinks {
-            FungibleLedger::<T>::transfer(
-                asset_id.0,
-                &Pallet::<T>::account_id(),
-                &account_id,
-                deposit.0,
-                ExistenceRequirement::KeepAlive,
-            )?;
-        }
+
         Ok(())
     }
 }
