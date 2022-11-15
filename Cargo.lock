@@ -6584,6 +6584,7 @@ dependencies = [
  "indoc",
  "jsonrpsee",
  "lazy_static",
+ "log",
  "manta-accounting",
  "manta-crypto",
  "manta-parameters",

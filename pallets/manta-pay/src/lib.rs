@@ -692,6 +692,17 @@ pub mod pallet {
         pub fn field_from_id(id: StandardAssetId) -> [u8; 32] {
             into_array_unchecked([id.to_le_bytes(), [0; 16]].concat())
         }
+
+        pub fn is_nft(asset_id: u32) -> bool {
+            let is_fungible = AssetRegistra::<T>::is_fungible_asset(asset_id);
+            is_fungible
+        }
+
+        pub fn nft_id(asset_id: u32) -> (u32, u32) {
+            let collection_id: u32 = (asset_id >> 16) as u32;
+            let item_id: u32 = (asset_id & 0xffff) as u32;
+            (collection_id, item_id)
+        }
     }
 }
 
@@ -936,28 +947,41 @@ where
     where
         I: Iterator<Item = (Self::AccountId, config::AssetValue)>,
     {
-        sources
-            .map(move |(account_id, withdraw)| {
-                FungibleLedger::<T>::can_withdraw(
-                    Pallet::<T>::id_from_field(fp_encode(*asset_id).expect(FP_ENCODE)).ok_or(
-                        InvalidSourceAccount {
-                            account_id: account_id.clone(),
-                            asset_id: *asset_id,
-                            withdraw,
-                        },
-                    )?,
-                    &account_id,
-                    &withdraw,
-                    ExistenceRequirement::KeepAlive,
-                )
-                .map(|_| WrapPair(account_id.clone(), withdraw))
-                .map_err(|_| InvalidSourceAccount {
-                    account_id,
-                    asset_id: *asset_id,
-                    withdraw,
+        let asset_id_type = Pallet::<T>::id_from_field(fp_encode(asset_id).expect(FP_ENCODE))
+            .ok_or(FungibleLedgerError::UnknownAsset)?;
+        let is_fungible = AssetRegistra::<T>::is_fungible_asset(asset_id_type);
+        let collection_id: u128 = (asset_id_type >> 16) as u128;
+        let item_id: u128 = (asset_id_type & 0xffff) as u128;
+        if is_fungible {
+            let x = sources
+                .map(move |(account_id, withdraw)| {
+                    FungibleLedger::<T>::can_withdraw(
+                        Pallet::<T>::id_from_field(fp_encode(*asset_id).expect(FP_ENCODE)).ok_or(
+                            InvalidSourceAccount {
+                                account_id: account_id.clone(),
+                                asset_id: *asset_id,
+                                withdraw,
+                            },
+                        )?,
+                        &account_id,
+                        &withdraw,
+                        ExistenceRequirement::KeepAlive,
+                    )
+                    .map(|_| WrapPair(account_id.clone(), withdraw))
+                    .map_err(|_| InvalidSourceAccount {
+                        account_id,
+                        asset_id: *asset_id,
+                        withdraw,
+                    })
                 })
-            })
-            .collect()
+                .collect();
+            x
+        } else {
+            let x = sources
+                .map(move |(account_id, withdraw)| Ok(WrapPair(account_id.clone(), withdraw)))
+                .collect();
+            x
+        }
     }
 
     #[inline]
@@ -1084,9 +1108,11 @@ where
                     &item_id,
                     &Pallet::<T>::account_id(),
                 )?;
+                log::info!("nft to_private transfered.");
             }
             for WrapPair(account_id, deposit) in sinks {
                 NonFungibleLedgers::<T>::transfer(&collection_id, &item_id, &account_id)?;
+                log::info!("nft to_public transfered.");
             }
         }
 

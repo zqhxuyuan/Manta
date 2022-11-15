@@ -213,6 +213,7 @@ std = [
   "pallet-aura-style-filter/std",
   'session-key-primitives/std',
   'xcm/std',
+  'log/std',
   'sp-application-crypto/std',
   'xcm-builder/std',
   'xcm-executor/std',

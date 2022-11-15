@@ -43,6 +43,12 @@ pub trait PullApi {
         max_receivers: u64,
         max_senders: u64,
     ) -> RpcResult<PullResponse>;
+
+    #[method(name = "mantaPay_is_nft", blocking)]
+    fn is_nft(&self, asset_id: u32) -> RpcResult<bool>;
+
+    #[method(name = "mantaPay_nft_id", blocking)]
+    fn nft_id(&self, asset_id: u32) -> RpcResult<(u32, u32)>;
 }
 
 /// Pull RPC API Implementation
@@ -90,5 +96,33 @@ where
                 ))
                 .into()
             })
+    }
+
+    #[inline]
+    fn is_nft(&self, asset_id: u32) -> RpcResult<bool> {
+        let api = self.client.runtime_api();
+        let at = BlockId::hash(self.client.info().best_hash);
+        api.is_nft(&at, asset_id).map_err(|err| {
+            CallError::Custom(ErrorObject::owned(
+                PULL_LEDGER_DIFF_ERROR,
+                "Unable to compute state diff for pull",
+                Some(format!("{:?}", err)),
+            ))
+            .into()
+        })
+    }
+
+    #[inline]
+    fn nft_id(&self, asset_id: u32) -> RpcResult<(u32, u32)> {
+        let api = self.client.runtime_api();
+        let at = BlockId::hash(self.client.info().best_hash);
+        api.nft_id(&at, asset_id).map_err(|err| {
+            CallError::Custom(ErrorObject::owned(
+                PULL_LEDGER_DIFF_ERROR,
+                "Unable to compute state diff for pull",
+                Some(format!("{:?}", err)),
+            ))
+            .into()
+        })
     }
 }
