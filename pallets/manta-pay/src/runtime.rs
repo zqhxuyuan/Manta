@@ -22,5 +22,7 @@ use manta_pay::signer::RawCheckpoint;
 sp_api::decl_runtime_apis! {
     pub trait PullLedgerDiffApi {
         fn pull_ledger_diff(checkpoint: RawCheckpoint, max_receivers: u64, max_senders: u64) -> PullResponse;
+        fn is_nft(asset_id: u32) -> bool;
+        fn nft_id(asset_id: u32) -> (u32, u32);
     }
 }

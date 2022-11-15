@@ -42,8 +42,8 @@ use sp_version::RuntimeVersion;
 use frame_support::{
     construct_runtime, parameter_types,
     traits::{
-        ConstU16, ConstU32, ConstU8, Contains, Currency, EitherOfDiverse, NeverEnsureOrigin,
-        PrivilegeCmp,
+        ConstU16, ConstU32, ConstU8, Contains, Currency, EitherOfDiverse, Everything,
+        NeverEnsureOrigin, PrivilegeCmp,
     },
     weights::{
         constants::{BlockExecutionWeight, ExtrinsicBaseWeight, RocksDbWeight, WEIGHT_PER_SECOND},
@@ -198,7 +198,7 @@ impl Contains<Call> for BaseFilter {
         match call {
             // Explicitly DISALLOWED calls
             | Call::Assets(_) // Filter Assets. Assets should only be accessed by AssetManager.
-            | Call::AssetManager(_) // AssetManager is also filtered because all of its extrinsics
+            // | Call::AssetManager(_) // AssetManager is also filtered because all of its extrinsics
                                     // are callable only by Root, and Root calls skip this whole filter.
             // Currently, we filter `register_as_candidate` as this call is not yet ready for community.
             | Call::CollatorSelection( manta_collator_selection::Call::register_as_candidate{..})
@@ -267,7 +267,8 @@ impl Contains<Call> for BaseFilter {
                 | orml_xtokens::Call::transfer_multicurrencies  {..})
             | Call::MantaPay(_)
             | Call::Preimage(_)
-            | Call::Utility(_) => true,
+            | Call::AssetManager(_)
+            | Call::Uniques(_) => true,
 
             // DISALLOW anything else
             _ => false,
@@ -277,7 +278,7 @@ impl Contains<Call> for BaseFilter {
 
 // Configure FRAME pallets to include in runtime.
 impl frame_system::Config for Runtime {
-    type BaseCallFilter = BaseFilter; // Let filter activate.
+    type BaseCallFilter = Everything; // Let filter activate.
     type BlockWeights = RuntimeBlockWeights;
     type BlockLength = RuntimeBlockLength;
     type AccountId = AccountId;
@@ -939,6 +940,18 @@ impl_runtime_apis! {
             max_sender: u64
         ) -> pallet_manta_pay::PullResponse {
             MantaPay::pull_ledger_diff(checkpoint.into(), max_receiver, max_sender)
+        }
+
+        fn is_nft(
+            asset_id: u32
+        ) -> bool {
+            MantaPay::is_nft(asset_id)
+        }
+
+         fn nft_id(
+            asset_id: u32
+        ) -> (u32, u32) {
+            MantaPay::nft_id(asset_id)
         }
     }
 

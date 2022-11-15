@@ -22,7 +22,10 @@ use core::marker::PhantomData;
 use frame_support::{
     dispatch::{DispatchError, TypeInfo},
     pallet_prelude::Get,
-    traits::tokens::nonfungibles::{Inspect, Mutate, Transfer},
+    traits::{
+        tokens::nonfungibles::{Inspect, Mutate, Transfer},
+        ExistenceRequirement,
+    },
     Parameter,
 };
 use frame_system::Config;
@@ -55,6 +58,18 @@ pub trait NonFungibleLedger: AssetIdType + BalanceType {
         asset_id: &Self::AssetId,
         who: &Self::AccountId,
     ) -> Result<(), FungibleLedgerError<Self::AssetId, Self::Balance>>;
+
+    fn can_mint(
+        asset_id: Self::AssetId,
+    ) -> Result<Self::AssetId, FungibleLedgerError<Self::AssetId, Self::Balance>> {
+        Ok(asset_id)
+    }
+
+    fn can_burn(
+        asset_id: Self::AssetId,
+    ) -> Result<Self::AssetId, FungibleLedgerError<Self::AssetId, Self::Balance>> {
+        Ok(asset_id)
+    }
 }
 
 ///

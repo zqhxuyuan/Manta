@@ -58,6 +58,7 @@ extern crate alloc;
 use alloc::{vec, vec::Vec};
 use core::marker::PhantomData;
 use frame_support::{traits::tokens::ExistenceRequirement, transactional, PalletId};
+use log;
 use manta_accounting::{
     asset,
     asset::AssetValueType,
@@ -616,6 +617,17 @@ pub mod pallet {
             );
             Ok(().into())
         }
+
+        pub fn is_nft(asset_id: u32) -> bool {
+            let is_fungible = AssetRegistra::<T>::is_fungible_asset(asset_id);
+            is_fungible
+        }
+
+        pub fn nft_id(asset_id: u32) -> (u32, u32) {
+            let collection_id: u32 = (asset_id >> 16) as u32;
+            let item_id: u32 = (asset_id & 0xffff) as u32;
+            (collection_id, item_id)
+        }
     }
 }
 
@@ -834,22 +846,41 @@ where
     where
         I: Iterator<Item = (Self::AccountId, asset::AssetValue)>,
     {
-        sources
-            .map(move |(account_id, withdraw)| {
-                FungibleLedger::<T>::can_withdraw(
-                    asset_id.0,
-                    &account_id,
-                    &withdraw.0,
-                    ExistenceRequirement::KeepAlive,
-                )
-                .map(|_| WrapPair(account_id.clone(), withdraw))
-                .map_err(|_| InvalidSourceAccount {
-                    account_id,
-                    asset_id,
-                    withdraw,
+        log::info!("asset_id: {:?}", asset_id.0);
+        let is_fungible = AssetRegistra::<T>::is_fungible_asset(asset_id.0);
+        let asset_id1: u32 = asset_id.0;
+        let collection_id: u32 = (asset_id1 >> 16) as u32;
+        let item_id: u32 = (asset_id1 & 0xffff) as u32;
+        log::info!(
+            "check_source_accounts is fungible:{:?}, collection:{}, item:{}",
+            is_fungible,
+            collection_id,
+            item_id
+        );
+        if is_fungible {
+            let x = sources
+                .map(move |(account_id, withdraw)| {
+                    FungibleLedger::<T>::can_withdraw(
+                        asset_id.0,
+                        &account_id,
+                        &withdraw.0,
+                        ExistenceRequirement::KeepAlive,
+                    )
+                    .map(|_| WrapPair(account_id.clone(), withdraw))
+                    .map_err(|_| InvalidSourceAccount {
+                        account_id,
+                        asset_id,
+                        withdraw,
+                    })
                 })
-            })
-            .collect()
+                .collect();
+            x
+        } else {
+            let x = sources
+                .map(move |(account_id, withdraw)| Ok(WrapPair(account_id.clone(), withdraw)))
+                .collect();
+            x
+        }
     }
 
     #[inline]
@@ -939,10 +970,17 @@ where
         // We don't use pallet_assets to store NFT. So if given asset_id not exist in pallet_assets, it's NFT.
         // This suppose FT asset(maximum) not large than minimum NFT asset_id. If those FT and NFT overlap,
         // This can't work for FT asset, because its being consider as NFT!
+        log::info!("asset_id: {:?}", asset_id.0);
         let is_fungible = AssetRegistra::<T>::is_fungible_asset(asset_id.0);
         let asset_id1: u32 = asset_id.0;
         let collection_id: u32 = (asset_id1 >> 16) as u32;
         let item_id: u32 = (asset_id1 & 0xffff) as u32;
+        log::info!(
+            "is fungible:{:?}, collection:{}, item:{}",
+            is_fungible,
+            collection_id,
+            item_id
+        );
         if is_fungible {
             for WrapPair(account_id, withdraw) in sources {
                 FungibleLedger::<T>::transfer(
@@ -969,9 +1007,11 @@ where
                     &item_id,
                     &Pallet::<T>::account_id(),
                 )?;
+                log::info!("nft to_private transfered.");
             }
             for WrapPair(account_id, deposit) in sinks {
                 NonFungibleLedgers::<T>::transfer(&collection_id, &item_id, &account_id)?;
+                log::info!("nft to_public transfered.");
             }
         }
 
