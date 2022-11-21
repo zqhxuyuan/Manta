@@ -59,12 +59,14 @@ pub trait NonFungibleLedger: AssetIdType + BalanceType {
         who: &Self::AccountId,
     ) -> Result<(), FungibleLedgerError<Self::AssetId, Self::Balance>>;
 
+    ///
     fn can_mint(
         asset_id: Self::AssetId,
     ) -> Result<Self::AssetId, FungibleLedgerError<Self::AssetId, Self::Balance>> {
         Ok(asset_id)
     }
 
+    ///
     fn can_burn(
         asset_id: Self::AssetId,
     ) -> Result<Self::AssetId, FungibleLedgerError<Self::AssetId, Self::Balance>> {

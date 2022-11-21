@@ -892,19 +892,38 @@ where
     where
         I: Iterator<Item = (Self::AccountId, asset::AssetValue)>,
     {
-        // NOTE: Existence of accounts is type-checked so we don't need to do anything here, just
-        // pass the data forward.
-        sinks
-            .map(move |(account_id, deposit)| {
-                FungibleLedger::<T>::can_deposit(asset_id.0, &account_id, deposit.0, false)
-                    .map(|_| WrapPair(account_id.clone(), deposit))
-                    .map_err(|_| InvalidSinkAccount {
-                        account_id,
-                        asset_id,
-                        deposit,
-                    })
-            })
-            .collect()
+        log::info!("asset_id: {:?}", asset_id.0);
+        let is_fungible = AssetRegistra::<T>::is_fungible_asset(asset_id.0);
+        let asset_id1: u32 = asset_id.0;
+        let collection_id: u32 = (asset_id1 >> 16) as u32;
+        let item_id: u32 = (asset_id1 & 0xffff) as u32;
+        log::info!(
+            "check_sink_accounts is fungible:{:?}, collection:{}, item:{}",
+            is_fungible,
+            collection_id,
+            item_id
+        );
+        if is_fungible {
+            // NOTE: Existence of accounts is type-checked so we don't need to do anything here, just
+            // pass the data forward.
+            sinks
+                .map(move |(account_id, deposit)| {
+                    FungibleLedger::<T>::can_deposit(asset_id.0, &account_id, deposit.0, false)
+                        .map(|_| WrapPair(account_id.clone(), deposit))
+                        .map_err(|_| InvalidSinkAccount {
+                            account_id,
+                            asset_id,
+                            deposit,
+                        })
+                })
+                .collect()
+        } else {
+            let x = sinks
+                .map(move |(account_id, deposit)|
+                    Ok(WrapPair(account_id.clone(), deposit)))
+                .collect();
+            x
+        }
     }
 
     #[inline]
