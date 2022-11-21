@@ -993,30 +993,41 @@ where
     where
         I: Iterator<Item = (Self::AccountId, config::AssetValue)>,
     {
-        // NOTE: Existence of accounts is type-checked so we don't need to do anything here, just
-        // pass the data forward.
-        sinks
-            .map(move |(account_id, deposit)| {
-                FungibleLedger::<T>::can_deposit(
-                    Pallet::<T>::id_from_field(fp_encode(*asset_id).expect(FP_ENCODE)).ok_or(
-                        InvalidSinkAccount {
-                            account_id: account_id.clone(),
-                            asset_id: *asset_id,
-                            deposit,
-                        },
-                    )?,
-                    &account_id,
-                    deposit,
-                    false,
-                )
-                .map(|_| WrapPair(account_id.clone(), deposit))
-                .map_err(|_| InvalidSinkAccount {
-                    account_id,
-                    asset_id: *asset_id,
-                    deposit,
+        let asset_id_type = Pallet::<T>::id_from_field(fp_encode(asset_id).expect(FP_ENCODE))
+            .ok_or(FungibleLedgerError::UnknownAsset)?;
+        let is_fungible = AssetRegistra::<T>::is_fungible_asset(asset_id_type);
+        let collection_id: u128 = (asset_id_type >> 16) as u128;
+        let item_id: u128 = (asset_id_type & 0xffff) as u128;
+        if is_fungible {
+            // NOTE: Existence of accounts is type-checked so we don't need to do anything here, just
+            // pass the data forward.
+            sinks
+                .map(move |(account_id, deposit)| {
+                    FungibleLedger::<T>::can_deposit(
+                        Pallet::<T>::id_from_field(fp_encode(*asset_id).expect(FP_ENCODE)).ok_or(
+                            InvalidSinkAccount {
+                                account_id: account_id.clone(),
+                                asset_id: *asset_id,
+                                deposit,
+                            },
+                        )?,
+                        &account_id,
+                        deposit,
+                        false,
+                    )
+                    .map(|_| WrapPair(account_id.clone(), deposit))
+                    .map_err(|_| InvalidSinkAccount {
+                        account_id,
+                        asset_id: *asset_id,
+                        deposit,
+                    })
                 })
-            })
-            .collect()
+                .collect()
+        } else {
+            sinks
+                .map(move |(account_id, deposit)| Ok(WrapPair(account_id.clone(), deposit)))
+                .collect()
+        }
     }
 
     #[inline]
