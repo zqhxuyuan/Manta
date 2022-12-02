@@ -27,14 +27,17 @@ use cumulus_client_service::{
     prepare_node_config, start_collator, start_full_node, StartCollatorParams, StartFullNodeParams,
 };
 use cumulus_primitives_core::ParaId;
-use cumulus_relay_chain_interface::{RelayChainError, RelayChainInterface};
+use cumulus_relay_chain_inprocess_interface::build_inprocess_relay_chain;
+use cumulus_relay_chain_interface::{RelayChainError, RelayChainInterface, RelayChainResult};
+use cumulus_relay_chain_rpc_interface::{create_client_and_start_worker, RelayChainRpcInterface};
+
 use jsonrpsee::RpcModule;
 pub use manta_primitives::types::{AccountId, Balance, Block, Hash, Header, Index as Nonce};
 
 use sc_executor::WasmExecutor;
-use sc_network::NetworkService;
+use sc_network::{NetworkBlock, NetworkService};
 pub use sc_rpc::{DenyUnsafe, SubscriptionTaskExecutor};
-use sc_service::{Configuration, Error, Role, TFullBackend, TFullClient, TaskManager};
+use sc_service::{Configuration, Error, TFullBackend, TFullClient, TaskManager};
 use sc_telemetry::{Telemetry, TelemetryHandle, TelemetryWorker, TelemetryWorkerHandle};
 use session_key_primitives::AuraId;
 use sp_api::ConstructRuntimeApi;
@@ -211,10 +214,6 @@ where
         bool,
     ) -> Result<Box<dyn ParachainConsensus<Block>>, Error>,
 {
-    if matches!(parachain_config.role, Role::Light) {
-        return Err("Light client not supported!".into());
-    }
-
     let parachain_config = prepare_node_config(parachain_config);
 
     let params = new_partial::<RuntimeApi>(&parachain_config)?;
