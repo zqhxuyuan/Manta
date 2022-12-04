@@ -15,18 +15,23 @@
 // along with Manta.  If not, see <http://www.gnu.org/licenses/>.
 
 //! Asset Utilities
-use crate::{constants::TEST_DEFAULT_ASSET_ED, types::Balance as MantaBalance};
+use crate::{
+    constants::TEST_DEFAULT_ASSET_ED, nft::NonFungibleLedger, types::Balance as MantaBalance,
+};
 use alloc::vec::Vec;
 use codec::{Decode, Encode};
 use core::{borrow::Borrow, marker::PhantomData};
 use frame_support::{
     dispatch::DispatchError,
     pallet_prelude::Get,
-    traits::tokens::{
-        currency::Currency,
-        fungible,
-        fungibles::{self, Mutate, Transfer},
-        DepositConsequence, ExistenceRequirement, WithdrawReasons,
+    traits::{
+        tokens::{
+            currency::Currency,
+            fungible,
+            fungibles::{self, Mutate, Transfer},
+            DepositConsequence, ExistenceRequirement, WithdrawReasons,
+        },
+        ContainsPair,
     },
     Parameter,
 };
@@ -112,6 +117,9 @@ pub trait AssetRegistry: AssetIdType + BalanceType {
         asset_id: &Self::AssetId,
         metadata: Self::Metadata,
     ) -> Result<(), Self::Error>;
+
+    ///
+    fn is_fungible_asset(asset_id: Self::AssetId) -> bool;
 }
 
 /// Asset Configuration
@@ -154,6 +162,14 @@ where
         AccountId = C::AccountId,
         AssetId = Self::AssetId,
         Balance = Self::Balance,
+    >;
+
+    /// Fungible Ledger
+    type NonFungibleLedger: NonFungibleLedger<
+        AccountId = C::AccountId,
+        AssetId = Self::AssetId,
+        Balance = Self::Balance,
+        // CollectionId = Self::AssetId
     >;
 }
 

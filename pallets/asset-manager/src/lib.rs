@@ -38,6 +38,7 @@ mod mock;
 mod tests;
 
 pub use crate::weights::WeightInfo;
+use frame_support::traits::Contains;
 pub use pallet::*;
 
 /// Asset Manager Pallet
@@ -46,7 +47,7 @@ pub mod pallet {
     use crate::weights::WeightInfo;
     use frame_support::{
         pallet_prelude::*,
-        traits::{Contains, StorageVersion},
+        traits::{Contains, ContainsPair, StorageVersion},
         transactional, PalletId,
     };
     use frame_system::pallet_prelude::*;
@@ -640,5 +641,17 @@ pub mod pallet {
         fn get(location: &MultiLocation) -> Option<u128> {
             MinXcmFee::<T>::get(&T::Location::from(location.clone()))
         }
+    }
+}
+
+pub struct IsFungibleAsset<T>(sp_std::marker::PhantomData<T>);
+
+impl<T> Contains<T::AssetId> for IsFungibleAsset<T>
+where
+    T: Config,
+{
+    #[inline]
+    fn contains(asset_id: &T::AssetId) -> bool {
+        return AssetIdLocation::<T>::contains_key(asset_id);
     }
 }

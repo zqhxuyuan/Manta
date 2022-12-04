@@ -80,10 +80,30 @@ use manta_pay::{
     manta_util::codec::Decode as _,
     parameters::load_transfer_parameters,
 };
-use manta_primitives::assets::{self, AssetConfig, FungibleLedger as _};
+use manta_primitives::{
+    assets::{self, AssetConfig, AssetRegistry, FungibleLedger as _},
+    nft::NonFungibleLedger,
+};
 use manta_util::{into_array_unchecked, Array};
 
 pub use crate::types::{Checkpoint, RawCheckpoint};
+// use manta_crypto::{
+//     constraint::ProofSystem,
+//     merkle_tree::{self, forest::Configuration as _},
+// };
+// use manta_pay::config;
+// use manta_primitives::{
+//     assets::{self, AssetConfig, FungibleLedger as _},
+//     nft::NonFungibleLedger,
+//     types::Balance,
+// };
+// use manta_util::codec::Decode as _;
+// use scale_codec::{Decode, Encode, MaxEncodedLen};
+// use scale_info::TypeInfo;
+// use types::*;
+
+// pub use manta_pay::signer::{Checkpoint, RawCheckpoint};
+// use manta_primitives::assets::AssetRegistry;
 pub use pallet::*;
 pub use types::PullResponse;
 pub use weights::WeightInfo;
@@ -147,6 +167,13 @@ pub mod pallet {
     /// Fungible Ledger Implementation for [`Config`]
     pub(crate) type FungibleLedger<T> =
         <<T as Config>::AssetConfig as AssetConfig<T>>::FungibleLedger;
+
+    /// Non Fungible Ledger Implementation for [`Config`]
+    pub(crate) type NonFungibleLedgers<T> =
+        <<T as Config>::AssetConfig as AssetConfig<T>>::NonFungibleLedger;
+
+    pub(crate) type AssetRegistra<T> =
+        <<T as Config>::AssetConfig as AssetConfig<T>>::AssetRegistry;
 
     #[pallet::hooks]
     impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {}
@@ -1022,26 +1049,47 @@ where
         proof: Self::ValidProof,
     ) -> Result<(), Self::UpdateError> {
         let _ = (proof, super_key);
-        for WrapPair(account_id, withdraw) in sources {
-            FungibleLedger::<T>::transfer(
-                Pallet::<T>::id_from_field(fp_encode(asset_id).expect(FP_ENCODE))
-                    .ok_or(FungibleLedgerError::UnknownAsset)?,
-                &account_id,
-                &Pallet::<T>::account_id(),
-                withdraw,
-                ExistenceRequirement::KeepAlive,
-            )?;
+        // TODO: use asset_id to decide whether it's FT or NFT.
+        // We don't use pallet_assets to store NFT. So if given asset_id not exist in pallet_assets, it's NFT.
+        // This suppose FT asset(maximum) not large than minimum NFT asset_id. If those FT and NFT overlap,
+        // This can't work for FT asset, because its being consider as NFT!
+        let asset_id_type = Pallet::<T>::id_from_field(fp_encode(asset_id).expect(FP_ENCODE))
+            .ok_or(FungibleLedgerError::UnknownAsset)?;
+        let is_fungible = AssetRegistra::<T>::is_fungible_asset(asset_id_type);
+        let collection_id: u128 = (asset_id_type >> 16) as u128;
+        let item_id: u128 = (asset_id_type & 0xffff) as u128;
+        if is_fungible {
+            for WrapPair(account_id, withdraw) in sources {
+                FungibleLedger::<T>::transfer(
+                    asset_id_type,
+                    &account_id,
+                    &Pallet::<T>::account_id(),
+                    withdraw,
+                    ExistenceRequirement::KeepAlive,
+                )?;
+            }
+            for WrapPair(account_id, deposit) in sinks {
+                FungibleLedger::<T>::transfer(
+                    asset_id_type,
+                    &Pallet::<T>::account_id(),
+                    &account_id,
+                    deposit,
+                    ExistenceRequirement::KeepAlive,
+                )?;
+            }
+        } else {
+            for WrapPair(account_id, withdraw) in sources {
+                NonFungibleLedgers::<T>::transfer(
+                    &collection_id,
+                    &item_id,
+                    &Pallet::<T>::account_id(),
+                )?;
+            }
+            for WrapPair(account_id, deposit) in sinks {
+                NonFungibleLedgers::<T>::transfer(&collection_id, &item_id, &account_id)?;
+            }
         }
-        for WrapPair(account_id, deposit) in sinks {
-            FungibleLedger::<T>::transfer(
-                Pallet::<T>::id_from_field(fp_encode(asset_id).expect(FP_ENCODE))
-                    .ok_or(FungibleLedgerError::UnknownAsset)?,
-                &Pallet::<T>::account_id(),
-                &account_id,
-                deposit,
-                ExistenceRequirement::KeepAlive,
-            )?;
-        }
+
         Ok(())
     }
 }

@@ -16,7 +16,7 @@
 
 use super::{
     weights, xcm_config::SelfReserve, AssetManager, Assets, Balances, Event,
-    NativeTokenExistentialDeposit, Origin, Runtime,
+    NativeTokenExistentialDeposit, Origin, Runtime, Uniques,
 };
 
 use manta_primitives::{
@@ -28,8 +28,15 @@ use manta_primitives::{
     types::{AccountId, Balance, DolphinAssetId},
 };
 
-use frame_support::{pallet_prelude::DispatchResult, parameter_types, PalletId};
-use frame_system::EnsureRoot;
+use frame_support::{
+    pallet_prelude::DispatchResult,
+    parameter_types,
+    traits::{AsEnsureOriginWithArg, Contains},
+    PalletId,
+};
+use frame_system::{EnsureRoot, EnsureSigned};
+use manta_primitives::nft::NonFungibleAsset;
+use sp_runtime::traits::ConstU32;
 use xcm::VersionedMultiLocation;
 
 parameter_types! {
@@ -56,6 +63,34 @@ impl pallet_assets::Config for Runtime {
     type Freezer = ();
     type Extra = ();
     type WeightInfo = weights::pallet_assets::SubstrateWeight<Runtime>;
+}
+
+parameter_types! {
+    pub const CollectionDeposit: Balance = 100;
+    pub const ItemDeposit: Balance = 1;
+    pub const KeyLimit: u32 = 32;
+    pub const ValueLimit: u32 = 256;
+}
+
+impl pallet_uniques::Config for Runtime {
+    type Event = Event;
+    type CollectionId = DolphinAssetId;
+    type ItemId = DolphinAssetId;
+    type Currency = Balances;
+    type ForceOrigin = EnsureRoot<AccountId>;
+    type CollectionDeposit = CollectionDeposit;
+    type ItemDeposit = ItemDeposit;
+    type MetadataDepositBase = MetadataDepositBase;
+    type AttributeDepositBase = MetadataDepositBase;
+    type DepositPerByte = MetadataDepositPerByte;
+    type StringLimit = ConstU32<50>;
+    type KeyLimit = KeyLimit;
+    type ValueLimit = ValueLimit;
+    type WeightInfo = pallet_uniques::weights::SubstrateWeight<Runtime>;
+    #[cfg(feature = "runtime-benchmarks")]
+    type Helper = ();
+    type CreateOrigin = AsEnsureOriginWithArg<EnsureSigned<AccountId>>;
+    type Locker = ();
 }
 
 pub struct MantaAssetRegistry;
@@ -118,6 +153,12 @@ impl AssetRegistry for MantaAssetRegistry {
             metadata.is_frozen,
         )
     }
+
+    fn is_fungible_asset(asset_id: Self::AssetId) -> bool {
+        <pallet_asset_manager::IsFungibleAsset<Runtime> as Contains<Self::AssetId>>::contains(
+            &asset_id,
+        )
+    }
 }
 
 parameter_types! {
@@ -141,6 +182,8 @@ parameter_types! {
 pub type DolphinConcreteFungibleLedger =
     NativeAndNonNative<Runtime, DolphinAssetConfig, Balances, Assets>;
 
+pub type DolphinNonFungibleLedger = NonFungibleAsset<Runtime, DolphinAssetId, Balance, Uniques>;
+
 /// AssetConfig implementations for this runtime
 #[derive(Clone, Eq, PartialEq)]
 pub struct DolphinAssetConfig;
@@ -162,6 +205,7 @@ impl AssetConfig<Runtime> for DolphinAssetConfig {
     type StorageMetadata = AssetStorageMetadata;
     type AssetRegistry = MantaAssetRegistry;
     type FungibleLedger = DolphinConcreteFungibleLedger;
+    type NonFungibleLedger = DolphinNonFungibleLedger;
 }
 
 impl pallet_asset_manager::Config for Runtime {

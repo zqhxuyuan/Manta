@@ -16,7 +16,7 @@
 
 use super::{
     weights, xcm_config::SelfReserve, AssetManager, Assets, Balances, Event,
-    NativeTokenExistentialDeposit, Origin, Runtime,
+    NativeTokenExistentialDeposit, Origin, Runtime, Uniques,
 };
 
 use manta_primitives::{
@@ -28,10 +28,17 @@ use manta_primitives::{
     types::{AccountId, Balance, CalamariAssetId},
 };
 
-use frame_support::{pallet_prelude::DispatchResult, parameter_types, traits::ConstU32, PalletId};
+use frame_support::{
+    pallet_prelude::DispatchResult,
+    parameter_types,
+    traits::{AsEnsureOriginWithArg, ConstU32, Contains},
+    PalletId,
+};
 
-use frame_system::EnsureRoot;
+use frame_system::{EnsureRoot, EnsureSigned};
+use sp_runtime::DispatchError;
 
+use manta_primitives::{nft::NonFungibleAsset, types::DolphinAssetId};
 use xcm::VersionedMultiLocation;
 
 parameter_types! {
@@ -58,6 +65,34 @@ impl pallet_assets::Config for Runtime {
     type Freezer = ();
     type Extra = ();
     type WeightInfo = weights::pallet_assets::SubstrateWeight<Runtime>;
+}
+
+parameter_types! {
+    pub const CollectionDeposit: Balance = 100;
+    pub const ItemDeposit: Balance = 1;
+    pub const KeyLimit: u32 = 32;
+    pub const ValueLimit: u32 = 256;
+}
+
+impl pallet_uniques::Config for Runtime {
+    type Event = Event;
+    type CollectionId = CalamariAssetId;
+    type ItemId = CalamariAssetId;
+    type Currency = Balances;
+    type ForceOrigin = EnsureRoot<AccountId>;
+    type CollectionDeposit = CollectionDeposit;
+    type ItemDeposit = ItemDeposit;
+    type MetadataDepositBase = MetadataDepositBase;
+    type AttributeDepositBase = MetadataDepositBase;
+    type DepositPerByte = MetadataDepositPerByte;
+    type StringLimit = ConstU32<50>;
+    type KeyLimit = KeyLimit;
+    type ValueLimit = ValueLimit;
+    type WeightInfo = pallet_uniques::weights::SubstrateWeight<Runtime>;
+    #[cfg(feature = "runtime-benchmarks")]
+    type Helper = ();
+    type CreateOrigin = AsEnsureOriginWithArg<EnsureSigned<AccountId>>;
+    type Locker = ();
 }
 
 pub struct CalamariAssetRegistry;
@@ -108,6 +143,13 @@ impl AssetRegistry for CalamariAssetRegistry {
             metadata.is_frozen,
         )
     }
+
+    fn is_fungible_asset(asset_id: Self::AssetId) -> bool {
+        // pallet_uniques::Pallet::<Runtime>::
+        <pallet_asset_manager::IsFungibleAsset<Runtime> as Contains<Self::AssetId>>::contains(
+            &asset_id,
+        )
+    }
 }
 
 parameter_types! {
@@ -131,6 +173,8 @@ parameter_types! {
 pub type CalamariConcreteFungibleLedger =
     NativeAndNonNative<Runtime, CalamariAssetConfig, Balances, Assets>;
 
+pub type CalamariNonFungibleLedger = NonFungibleAsset<Runtime, CalamariAssetId, Balance, Uniques>;
+
 /// AssetConfig implementations for this runtime
 #[derive(Clone, Eq, PartialEq)]
 pub struct CalamariAssetConfig;
@@ -152,6 +196,7 @@ impl AssetConfig<Runtime> for CalamariAssetConfig {
     type StorageMetadata = AssetStorageMetadata;
     type AssetRegistry = CalamariAssetRegistry;
     type FungibleLedger = CalamariConcreteFungibleLedger;
+    type NonFungibleLedger = CalamariNonFungibleLedger;
 }
 
 impl pallet_asset_manager::Config for Runtime {

@@ -32,6 +32,7 @@ use manta_primitives::{
         AssetStorageMetadata, BalanceType, LocationType, NativeAndNonNative,
     },
     constants::{ASSET_MANAGER_PALLET_ID, ASSET_STRING_LIMIT},
+    nft::MockNonFungibleLedger,
     types::{AccountId, Balance, BlockNumber, CalamariAssetId, Header},
 };
 use sp_core::H256;
@@ -165,6 +166,10 @@ impl AssetRegistry for MantaAssetRegistry {
             metadata.is_frozen,
         )
     }
+
+    fn is_fungible_asset(asset_id: Self::AssetId) -> bool {
+        true
+    }
 }
 
 parameter_types! {
@@ -206,6 +211,7 @@ impl AssetConfig<Runtime> for MantaAssetConfig {
     type StorageMetadata = AssetStorageMetadata;
     type AssetRegistry = MantaAssetRegistry;
     type FungibleLedger = NativeAndNonNative<Runtime, MantaAssetConfig, Balances, Assets>;
+    type NonFungibleLedger = MockNonFungibleLedger<CalamariAssetId, Balance>;
 }
 
 impl pallet_asset_manager::Config for Runtime {

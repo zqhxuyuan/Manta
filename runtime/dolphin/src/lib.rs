@@ -42,8 +42,8 @@ use sp_version::RuntimeVersion;
 use frame_support::{
     construct_runtime, parameter_types,
     traits::{
-        ConstU16, ConstU32, ConstU8, Contains, Currency, EitherOfDiverse, NeverEnsureOrigin,
-        PrivilegeCmp,
+        ConstU16, ConstU32, ConstU8, Contains, Currency, EitherOfDiverse, Everything,
+        NeverEnsureOrigin, PrivilegeCmp,
     },
     weights::{
         constants::{BlockExecutionWeight, ExtrinsicBaseWeight, RocksDbWeight, WEIGHT_PER_SECOND},
@@ -277,7 +277,7 @@ impl Contains<Call> for BaseFilter {
 
 // Configure FRAME pallets to include in runtime.
 impl frame_system::Config for Runtime {
-    type BaseCallFilter = BaseFilter; // Let filter activate.
+    type BaseCallFilter = Everything; // Let filter activate.
     type BlockWeights = RuntimeBlockWeights;
     type BlockLength = RuntimeBlockLength;
     type AccountId = AccountId;
@@ -747,6 +747,7 @@ construct_runtime!(
         Assets: pallet_assets::{Pallet, Call, Storage, Event<T>} = 45,
         AssetManager: pallet_asset_manager::{Pallet, Call, Storage, Config<T>, Event<T>} = 46,
         MantaPay: pallet_manta_pay::{Pallet, Call, Storage, Event<T>} = 47,
+        Uniques: pallet_uniques::{Pallet, Call, Storage, Event<T>} = 48,
     }
 );
 

@@ -545,6 +545,10 @@ impl AssetRegistry for CalamariAssetRegistry {
             metadata.is_frozen,
         )
     }
+
+    fn is_fungible_asset(asset_id: Self::AssetId) -> bool {
+        true
+    }
 }
 
 parameter_types! {
@@ -586,6 +590,7 @@ impl AssetConfig<Runtime> for ParachainAssetConfig {
     type StorageMetadata = AssetStorageMetadata;
     type AssetRegistry = CalamariAssetRegistry;
     type FungibleLedger = NativeAndNonNative<Runtime, ParachainAssetConfig, Balances, Assets>;
+    type NonFungibleLedger = MockNonFungibleLedger<CalamariAssetId, Balance>;
 }
 
 impl pallet_asset_manager::Config for Runtime {
@@ -690,6 +695,8 @@ pub(crate) fn para_events() -> Vec<Event> {
 }
 
 use frame_support::traits::{OnFinalize, OnInitialize, OnRuntimeUpgrade};
+use manta_primitives::nft::MockNonFungibleLedger;
+
 pub(crate) fn on_runtime_upgrade() {
     PolkadotXcm::on_runtime_upgrade();
 }
