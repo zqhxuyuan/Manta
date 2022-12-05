@@ -694,7 +694,7 @@ pub mod pallet {
         }
 
         pub fn is_nft(asset_id: u32) -> bool {
-            let is_fungible = AssetRegistra::<T>::is_fungible_asset(asset_id);
+            let is_fungible = AssetRegistra::<T>::is_fungible_asset(asset_id as u128);
             is_fungible
         }
 
@@ -947,8 +947,8 @@ where
     where
         I: Iterator<Item = (Self::AccountId, config::AssetValue)>,
     {
-        let asset_id_type = Pallet::<T>::id_from_field(fp_encode(asset_id).expect(FP_ENCODE))
-            .ok_or(FungibleLedgerError::UnknownAsset)?;
+        let asset_id_type =
+            Pallet::<T>::id_from_field(fp_encode(*asset_id).expect(FP_ENCODE)).unwrap();
         let is_fungible = AssetRegistra::<T>::is_fungible_asset(asset_id_type);
         let collection_id: u128 = (asset_id_type >> 16) as u128;
         let item_id: u128 = (asset_id_type & 0xffff) as u128;
@@ -993,8 +993,8 @@ where
     where
         I: Iterator<Item = (Self::AccountId, config::AssetValue)>,
     {
-        let asset_id_type = Pallet::<T>::id_from_field(fp_encode(asset_id).expect(FP_ENCODE))
-            .ok_or(FungibleLedgerError::UnknownAsset)?;
+        let asset_id_type =
+            Pallet::<T>::id_from_field(fp_encode(*asset_id).expect(FP_ENCODE)).unwrap();
         let is_fungible = AssetRegistra::<T>::is_fungible_asset(asset_id_type);
         let collection_id: u128 = (asset_id_type >> 16) as u128;
         let item_id: u128 = (asset_id_type & 0xffff) as u128;
