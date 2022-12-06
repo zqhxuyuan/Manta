@@ -58,6 +58,9 @@
 extern crate alloc;
 
 use crate::types::{
+    fp_decode, fp_encode, Asset, AssetValue, FullIncomingNote, NullifierCommitment, OutgoingNote,
+    ReceiverChunk, SenderChunk, TransferPost, Utxo, UtxoAccumulatorOutput, UtxoMerkleTreePath,
+    FP_DECODE, FP_ENCODE,
     asset_value_decode, asset_value_encode, fp_decode, fp_encode, Asset, AssetValue,
     FullIncomingNote, NullifierCommitment, OutgoingNote, ReceiverChunk, SenderChunk, TransferPost,
     Utxo, UtxoAccumulatorOutput, UtxoMerkleTreePath, FP_ENCODE,
@@ -866,13 +869,14 @@ where
                 .current_path
                 .try_into()
                 .expect("Unable to decode the Current Path.");
+            let mut leaf_digest = tree
+                .leaf_digest
+                .map(|x| fp_decode(x.to_vec()).expect(FP_ENCODE));
             for (utxo, note) in insertions {
                 next_root = Some(
                     merkle_tree::single_path::raw::insert(
                         &utxo_accumulator_model,
-                        &mut tree
-                            .leaf_digest
-                            .map(|x| fp_decode(x.to_vec()).expect(FP_ENCODE)),
+                        &mut leaf_digest,
                         &mut current_path,
                         utxo.item_hash(&utxo_accumulator_item_hash, &mut ()),
                     )
@@ -894,6 +898,7 @@ where
             tree.current_path = current_path
                 .try_into()
                 .expect("Unable to decode the Current Path.");
+            tree.leaf_digest = leaf_digest.map(|x| fp_encode(x).expect(FP_DECODE));
             if let Some(next_root) = next_root {
                 ShardTrees::<T>::insert(shard_index, tree);
                 UtxoAccumulatorOutputs::<T>::insert(fp_encode(next_root).expect(FP_ENCODE), ());
